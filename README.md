@@ -25,26 +25,124 @@ already contain. Two sources do most of the work:
 
 ## 2. Model architecture
 
-```
-fact summary ──► TF-IDF n-grams + financial lexicon ──► Ridge ─────────► direction d
-release timing, disclosure length / text signal ─────► LightGBM ──────► magnitude m ≈ E|y − ½|
+Two quantitative branches, one for **direction** and one for **magnitude**, form a
+baseline prediction. A **prior-quarter surprise adjustment** is then applied. The
+equations below describe the public reference implementation in
+[`earnings_reaction.py`](earnings_reaction.py). The production model has the same
+structure, with its own features, settings and fitted coefficients, which are not
+published.
 
-base percentile   p₀ = ½ + k · z(d · m)
-prior surprise    s₋₁ = the company's previous earnings-surprise percentile (point-in-time lookup)
-final percentile  p  = clip(p₀ + γ · z(s₋₁), 0.01, 0.99)       if s₋₁ is available
-                  p  = p₀                                        otherwise (exact fallback)
+```mermaid
+flowchart LR
+    T["Fact summary"] --> D["Stage 1 · Ridge<br/>direction d"]
+    F["Release timing and<br/>text-derived features"] --> M["Stage 2 · LightGBM<br/>magnitude m"]
+    D --> B["Stage 3 · baseline p⁰"]
+    M --> B
+    S["Prior-quarter surprise<br/>(point-in-time)"] --> A["Stage 4 · adjustment"]
+    B --> A
+    A --> P["Predicted percentile p"]
 ```
 
-- **Direction.** Ridge regression on TF-IDF features and lexicon counts. It is
-  trained on the *surprise-residualized* reaction rank, the only part the metric
-  rewards.
-- **Magnitude.** A LightGBM regressor predicts how large the reaction will be, so
-  confident directional calls on volatile names count for more.
-- **Prior-quarter surprise adjustment.** A single linear term with a negative
-  coefficient (a repeat beat is partly priced in). It is fit on out-of-sample base
-  predictions and held fixed.
-- **No language model, no network, no external data** at prediction time.
-  Inference is deterministic and takes milliseconds.
+| Symbol | Meaning |
+|---|---|
+| $`y_i`$ | Percentile rank of event $`i`$'s one-day abnormal return within the period |
+| $`s_i`$ | Percentile rank of event $`i`$'s earnings surprise within the period |
+| $`r_i`$ | Surprise-residualized reaction, the Ridge target |
+| $`\mathbf{x}_i`$ | TF-IDF n-grams and standardized financial-lexicon counts |
+| $`\mathbf{z}_i`$ | Release-timing and text-derived features |
+| $`d_i,\ m_i`$ | Directional signal and expected reaction magnitude |
+| $`p_i^{0},\ p_i`$ | Baseline and final predicted percentile |
+| $`s_i^{\mathrm{prev}}`$ | The company's prior earnings-surprise percentile, if eligible |
+| $`\mu,\ \sigma`$ | Training-period mean and standard deviation of the subscripted quantity |
+| $`k,\ \gamma`$ | Calibration slope and prior-surprise coefficient |
+| $`B_i`$ | Point-in-time information bound for event $`i`$ |
+
+### Stage 1: directional signal
+
+The metric rewards only the part of the reaction that the surprise does not explain.
+The Ridge target therefore removes the surprise's linear projection:
+
+```math
+r_i = y_i - \bar{y} - b\,(s_i - \bar{s}),
+\qquad
+b = \frac{\operatorname{Cov}(s, y)}{\operatorname{Var}(s)}
+```
+
+A Ridge regression on TF-IDF n-grams and lexicon counts then gives the directional
+signal:
+
+```math
+d_i = \hat{\beta}_0 + \hat{\boldsymbol\beta}^{\top}\mathbf{x}_i,
+\qquad
+(\hat{\beta}_0, \hat{\boldsymbol\beta}) = \arg\min_{\beta_0,\,\boldsymbol\beta}
+\sum_i \left(r_i - \beta_0 - \boldsymbol\beta^{\top}\mathbf{x}_i\right)^2
++ \lambda \lVert \boldsymbol\beta \rVert_2^2
+```
+
+### Stage 2: reaction magnitude
+
+A LightGBM regressor $`\hat{g}`$, trained on release-timing and text-derived features,
+estimates how far the reaction will land from the median. Volatile names get a
+larger magnitude, so confident directional calls on them count for more:
+
+```math
+m_i = \max\left\{\hat{g}(\mathbf{z}_i),\ 10^{-3}\right\},
+\qquad
+\hat{g}(\mathbf{z}) \approx \mathbb{E}\left[\,\left\lvert y - \tfrac{1}{2} \right\rvert \,\middle|\, \mathbf{z}\,\right]
+```
+
+### Stage 3: quantitative baseline
+
+Direction and magnitude are multiplied, standardized with training-period statistics,
+and mapped affinely onto the percentile scale. The metric is a linear regression, so
+the slope $`k`$ only sets the scale; clipping keeps every prediction a valid
+percentile:
+
+```math
+p_i^{0} = \operatorname{clip}\left(\frac{1}{2} + k\,\frac{d_i m_i - \mu_{dm}}{\sigma_{dm}},\ 0.01,\ 0.99\right)
+```
+
+### Stage 4: prior-quarter surprise adjustment
+
+A company that beat strongly last quarter is expected to beat again, so a repeat
+beat is partly priced in. The adjustment is a single linear term with a **negative**
+coefficient. It is fit on *out-of-sample* baseline predictions, then held fixed.
+Without an eligible prior surprise, the baseline is returned **exactly**:
+
+```math
+p_i =
+\begin{cases}
+\operatorname{clip}\left(p_i^{0} + \gamma\,\dfrac{s_i^{\mathrm{prev}} - \mu_{s}}{\sigma_{s}},\ 0.01,\ 0.99\right)
+& \text{if } s_i^{\mathrm{prev}} \text{ is eligible,} \\[8pt]
+p_i^{0} & \text{otherwise.}
+\end{cases}
+```
+
+**Eligibility.** The prior surprise comes from the most recent earlier event
+$`j`$ of the same company that satisfies two conditions:
+- it was released before the bound;
+- its quarter's percentile ranks were final before the bound (time $`\tau_{q(j)}`$),
+  because a rank within an unfinished quarter would use later events.
+
+```math
+s_i^{\mathrm{prev}} = s_{j^\ast},
+\qquad
+j^\ast = \text{latest } j \text{ with } t_j < B_i \text{ and } \tau_{q(j)} < B_i
+```
+
+```math
+B_i =
+\begin{cases}
+\text{knowledge cutoff of event } i & \text{if it is supplied,} \\
+t_i - \Delta & \text{otherwise.}
+\end{cases}
+```
+
+Here $`t_i`$ is the release time. The margin $`\Delta`$ is chosen so the fallback
+bound is never later than a true cutoff.
+
+The prediction uses **no language model, no network and no external data**. It is
+deterministic and takes milliseconds.
 
 ## 3. Point-in-time methodology and evaluation
 
