@@ -1,0 +1,28 @@
+[project]
+name = "optiver-explaining-markets-2026"
+version = "1.0.0"
+description = "Quantitative earnings-reaction forecasting: a self-contained reference implementation"
+readme = "README.md"
+license = { text = "MIT" }
+authors = [{ name = "Jessica He" }]
+requires-python = ">=3.10"
+dependencies = [
+    "numpy>=1.26",
+    "scipy>=1.11",
+    "scikit-learn>=1.4",
+    "lightgbm>=4.0",
+]
+
+[project.optional-dependencies]
+test = ["pytest>=8"]
+
+[tool.setuptools]
+py-modules = ["earnings_reaction", "demo"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["."]
+
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
