@@ -32,17 +32,6 @@ equations below describe the public reference implementation in
 structure, with its own features, settings and fitted coefficients, which are not
 published.
 
-```mermaid
-flowchart LR
-    T[Fact summary] --> D[Stage 1: Ridge direction]
-    F[Timing and text features] --> M[Stage 2: LightGBM magnitude]
-    D --> B[Stage 3: baseline]
-    M --> B
-    B --> A[Stage 4: adjustment]
-    S[Prior-quarter surprise] --> A
-    A --> P[Predicted percentile]
-```
-
 | Symbol | Meaning |
 |---|---|
 | $`y_i`$ | Percentile rank of event $`i`$'s one-day abnormal return within the period |
