@@ -34,13 +34,13 @@ published.
 
 ```mermaid
 flowchart LR
-    T["Fact summary"] --> D["Stage 1 · Ridge<br/>direction d"]
-    F["Release timing and<br/>text-derived features"] --> M["Stage 2 · LightGBM<br/>magnitude m"]
-    D --> B["Stage 3 · baseline p⁰"]
+    T[Fact summary] --> D[Stage 1: Ridge direction]
+    F[Timing and text features] --> M[Stage 2: LightGBM magnitude]
+    D --> B[Stage 3: baseline]
     M --> B
-    S["Prior-quarter surprise<br/>(point-in-time)"] --> A["Stage 4 · adjustment"]
-    B --> A
-    A --> P["Predicted percentile p"]
+    B --> A[Stage 4: adjustment]
+    S[Prior-quarter surprise] --> A
+    A --> P[Predicted percentile]
 ```
 
 | Symbol | Meaning |
@@ -65,7 +65,7 @@ The Ridge target therefore removes the surprise's linear projection:
 ```math
 r_i = y_i - \bar{y} - b\,(s_i - \bar{s}),
 \qquad
-b = \frac{\operatorname{Cov}(s, y)}{\operatorname{Var}(s)}
+b = \frac{\mathrm{Cov}(s, y)}{\mathrm{Var}(s)}
 ```
 
 A Ridge regression on TF-IDF n-grams and lexicon counts then gives the directional
@@ -99,7 +99,7 @@ the slope $`k`$ only sets the scale; clipping keeps every prediction a valid
 percentile:
 
 ```math
-p_i^{0} = \operatorname{clip}\left(\frac{1}{2} + k\,\frac{d_i m_i - \mu_{dm}}{\sigma_{dm}},\ 0.01,\ 0.99\right)
+p_i^{0} = \mathrm{clip}\left(\frac{1}{2} + k\,\frac{d_i m_i - \mu_{dm}}{\sigma_{dm}},\ 0.01,\ 0.99\right)
 ```
 
 ### Stage 4: prior-quarter surprise adjustment
@@ -112,7 +112,7 @@ Without an eligible prior surprise, the baseline is returned **exactly**:
 ```math
 p_i =
 \begin{cases}
-\operatorname{clip}\left(p_i^{0} + \gamma\,\dfrac{s_i^{\mathrm{prev}} - \mu_{s}}{\sigma_{s}},\ 0.01,\ 0.99\right)
+\mathrm{clip}\left(p_i^{0} + \gamma\,\dfrac{s_i^{\mathrm{prev}} - \mu_{s}}{\sigma_{s}},\ 0.01,\ 0.99\right)
 & \text{if } s_i^{\mathrm{prev}} \text{ is eligible,} \\[8pt]
 p_i^{0} & \text{otherwise.}
 \end{cases}
